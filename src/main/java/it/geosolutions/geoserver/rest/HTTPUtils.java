@@ -25,15 +25,6 @@
 
 package it.geosolutions.geoserver.rest;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UnsupportedEncodingException;
-import java.net.ConnectException;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
-
 import org.apache.commons.httpclient.Credentials;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.HttpStatus;
@@ -51,11 +42,74 @@ import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.ConnectException;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+
 /**
  * Low level HTTP utilities.
  */
 class HTTPUtils {
     private static final Logger LOGGER = LoggerFactory.getLogger(HTTPUtils.class);
+
+    static String encodeUrl(String url) {
+        // perform some simple encoding to the path names.  This takes care of cases where
+        // layers or workspaces have illegal http characters.
+        // it cannot fix all
+        String protocol, authority, path, query, fragment = null;
+        String[] protocolPathParts = url.split("://", 2);
+        if (protocolPathParts.length == 1) {
+            // unexpected format so just try out url
+            return url;
+        }
+
+        protocol = protocolPathParts[0];
+        String[] pathQueryParts = protocolPathParts[1].split("\\?", 2);
+        path = pathQueryParts[0];
+        if (pathQueryParts.length == 1) {
+            query = null;
+        } else {
+            query = pathQueryParts[1];
+        }
+
+
+        if (query == null) {
+            String[] fragmentParts = path.split("#", 2);
+            if (fragmentParts.length > 1) {
+                path = fragmentParts[0];
+                fragment = fragmentParts[1];
+            }
+        } else {
+            String[] fragmentParts = query.split("#", 2);
+            if (fragmentParts.length > 1) {
+                query = fragmentParts[0];
+                fragment = fragmentParts[1];
+            }
+        }
+
+        int firstSlash = path.indexOf('/');
+        if (firstSlash > -1) {
+            authority = path.substring(0, firstSlash);
+            path = path.substring(firstSlash);
+        } else {
+            authority = path;
+            path = null;
+        }
+
+        try {
+            return new URI(protocol, authority, path, query, fragment).toString();
+        } catch (URISyntaxException e) {
+            // fallback to original string
+            return url;
+        }
+    }
 
     /**
      * Performs an HTTP GET on the given URL.
@@ -81,10 +135,11 @@ class HTTPUtils {
 	public static String get(String url, String username, String pw) throws MalformedURLException {
 
         GetMethod httpMethod = null;
+        String encodedUrl = encodeUrl(url);
 		try {
             HttpClient client = new HttpClient();
-            setAuth(client, url, username, pw);
-			httpMethod = new GetMethod(url);
+            setAuth(client, encodedUrl, username, pw);
+			httpMethod = new GetMethod(encodedUrl);
 			client.getHttpConnectionManager().getParams().setConnectionTimeout(5000);
 			int status = client.executeMethod(httpMethod);
 			if(status == HttpStatus.SC_OK) {
@@ -97,12 +152,12 @@ class HTTPUtils {
                     return response;
                 }
 			} else {
-				LOGGER.info("("+status+") " + HttpStatus.getStatusText(status) + " -- " + url );
+				LOGGER.info("("+status+") " + HttpStatus.getStatusText(status) + " -- " + encodedUrl );
 			}
 		} catch (ConnectException e) {
-			LOGGER.info("Couldn't connect to ["+url+"]");
+			LOGGER.info("Couldn't connect to ["+encodedUrl+"]");
 		} catch (IOException e) {
-			LOGGER.info("Error talking to ["+url+"]", e);
+			LOGGER.info("Error talking to ["+encodedUrl+"]", e);
 		} finally {
             if(httpMethod != null)
                 httpMethod.releaseConnection();
@@ -267,9 +322,10 @@ class HTTPUtils {
      */
     private static String send(final EntityEnclosingMethod httpMethod, String url, RequestEntity requestEntity, String username, String pw) {
 
+        String encodedUrl = encodeUrl(url);
         try {
             HttpClient client = new HttpClient();
-            setAuth(client, url, username, pw);
+            setAuth(client, encodedUrl, username, pw);
 //			httpMethod = new PutMethod(url);
 			client.getHttpConnectionManager().getParams().setConnectionTimeout(5000);
             if(requestEntity != null)
@@ -287,17 +343,17 @@ class HTTPUtils {
 				default:
 					LOGGER.warn("Bad response: code["+status+"]" +
 							" msg["+httpMethod.getStatusText()+"]" +
-							" url["+url+"]" +
+							" url["+encodedUrl+"]" +
                             " method["+httpMethod.getClass().getSimpleName()+"]: " +
                             IOUtils.toString(httpMethod.getResponseBodyAsStream())
 							);
 					return null;
 			}
 		} catch (ConnectException e) {
-			LOGGER.info("Couldn't connect to ["+url+"]");
+			LOGGER.info("Couldn't connect to ["+encodedUrl+"]");
     		return null;
         } catch (IOException e) {
-            LOGGER.error("Error talking to " + url + " : " + e.getLocalizedMessage());
+            LOGGER.error("Error talking to " + encodedUrl + " : " + e.getLocalizedMessage());
     		return null;
 		} finally {
             if(httpMethod != null)
@@ -308,11 +364,12 @@ class HTTPUtils {
 	public static boolean delete(String url, final String user, final String pw) {
 
     	DeleteMethod httpMethod = null;
+        String encodedUrl = encodeUrl(url);
 
 		try {
             HttpClient client = new HttpClient();
-            setAuth(client, url, user, pw);
-            httpMethod = new DeleteMethod(url);
+            setAuth(client, encodedUrl, user, pw);
+            httpMethod = new DeleteMethod(encodedUrl);
 			client.getHttpConnectionManager().getParams().setConnectionTimeout(5000);
 			int status = client.executeMethod(httpMethod);
 			String response = "";
@@ -325,16 +382,16 @@ class HTTPUtils {
 					return true;
 				}
                 if(LOGGER.isDebugEnabled())
-                    LOGGER.debug("("+status+") " + httpMethod.getStatusText() + " -- " + url );
+                    LOGGER.debug("("+status+") " + httpMethod.getStatusText() + " -- " + encodedUrl );
 				return true;
 			} else {
-				LOGGER.info("("+status+") " + httpMethod.getStatusText() + " -- " + url );
+				LOGGER.info("("+status+") " + httpMethod.getStatusText() + " -- " + encodedUrl );
 				LOGGER.info("Response: '"+response+"'" );
 			}
 		} catch (ConnectException e) {
-			LOGGER.info("Couldn't connect to ["+url+"]");
+			LOGGER.info("Couldn't connect to ["+encodedUrl+"]");
 		} catch (IOException e) {
-			LOGGER.info("Error talking to ["+url+"]", e);
+			LOGGER.info("Error talking to ["+encodedUrl+"]", e);
 		} finally {
             if(httpMethod != null)
                 httpMethod.releaseConnection();
@@ -353,15 +410,16 @@ class HTTPUtils {
 	public static boolean httpPing(String url, String username, String pw) {
 
         GetMethod httpMethod = null;
+        String encodedUrl = encodeUrl(url);
 
 		try {
 			HttpClient client = new HttpClient();
-            setAuth(client, url, username, pw);
-			httpMethod = new GetMethod(url);
+            setAuth(client, encodedUrl, username, pw);
+			httpMethod = new GetMethod(encodedUrl);
 			client.getHttpConnectionManager().getParams().setConnectionTimeout(2000);
 			int status = client.executeMethod(httpMethod);
             if(status != HttpStatus.SC_OK) {
-                LOGGER.warn("PING failed at '"+url+"': ("+status+") " + httpMethod.getStatusText());
+                LOGGER.warn("PING failed at '"+encodedUrl+"': ("+status+") " + httpMethod.getStatusText());
                 return false;
             } else {
                 return true;
@@ -390,11 +448,12 @@ class HTTPUtils {
 	public static boolean exists(String url, String username, String pw) {
 
         GetMethod httpMethod = null;
+        String encodedUrl = encodeUrl(url);
 
 		try {
 			HttpClient client = new HttpClient();
-            setAuth(client, url, username, pw);
-			httpMethod = new GetMethod(url);
+            setAuth(client, encodedUrl, username, pw);
+			httpMethod = new GetMethod(encodedUrl);
 			client.getHttpConnectionManager().getParams().setConnectionTimeout(2000);
 			int status = client.executeMethod(httpMethod);
             switch(status) {
@@ -403,7 +462,7 @@ class HTTPUtils {
                 case HttpStatus.SC_NOT_FOUND:
                     return false;
                 default:
-                    throw new RuntimeException("Unhandled response status at '"+url+"': ("+status+") " + httpMethod.getStatusText());
+                    throw new RuntimeException("Unhandled response status at '"+encodedUrl+"': ("+status+") " + httpMethod.getStatusText());
             }
 		} catch (ConnectException e) {
             throw new RuntimeException(e);
